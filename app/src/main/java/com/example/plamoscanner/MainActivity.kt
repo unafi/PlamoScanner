@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -52,11 +53,12 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
     // UI表示用ステート
     private var currentMode by mutableStateOf(ScanMode.HUKURO_SCAN)
-    private var scannedId by mutableStateOf("未スキャン")
+    private var scannedId by mutableStateOf("-")
     private var resultTitle by mutableStateOf("")
-    private var statusMessage by mutableStateOf("タグをかざすか、QRを映してください")
+    private var statusMessage by mutableStateOf("ボタンを押してスキャン開始")
     
-    // エフェクト用ステート
+    // スキャン状態管理
+    private var isScanningActive by mutableStateOf(false)
     private var isFlashing by mutableStateOf(false)
     private var isLocked by mutableStateOf(false)
 
@@ -68,7 +70,6 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
-        // シャッター音の準備
         shutterSound.load(MediaActionSound.SHUTTER_CLICK)
 
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
@@ -102,12 +103,14 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                         title = resultTitle,
                         status = statusMessage,
                         hasCameraPermission = hasCameraPermission,
+                        isScanningActive = isScanningActive,
                         isFlashing = isFlashing,
                         onIdDetected = { id -> onIdDetected(id) },
                         onModeChange = { 
                             currentMode = it
-                            scannedId = "未スキャン"
+                            scannedId = "-"
                             resultTitle = ""
+                            isScanningActive = true // ボタン押下でスキャン開始
                             statusMessage = when(it) {
                                 ScanMode.HUKURO_SCAN -> "袋をスキャンしてください"
                                 ScanMode.HAKO_SCAN -> "箱をスキャンしてください"
@@ -140,19 +143,16 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         shutterSound.release()
     }
 
-    // NFC検出時
     override fun onTagDiscovered(tag: Tag?) {
         val idBytes = tag?.id ?: return
         val uid = idBytes.joinToString(":") { "%02X".format(it) }
         onIdDetected(uid)
     }
 
-    // ID検出時の共通エントリ（NFC/QR共通）
     private fun onIdDetected(id: String) {
-        if (isLocked) return // インターバル中は無視
+        if (!isScanningActive || isLocked) return // 非アクティブ時、ロック中は無視
 
         lifecycleScope.launch(Dispatchers.Main) {
-            // 1. 手応え演出（音と視覚）
             isLocked = true
             isFlashing = true
             shutterSound.play(MediaActionSound.SHUTTER_CLICK)
@@ -160,11 +160,9 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             scannedId = id
             statusMessage = "処理中..."
             
-            // 2. フラッシュを少し見せてから消す
             delay(100)
             isFlashing = false
             
-            // 3. メイン処理を実行
             withContext(Dispatchers.IO) {
                 when (currentMode) {
                     ScanMode.HUKURO_SCAN -> processHukuro(id)
@@ -174,30 +172,17 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                 }
             }
 
-            // 4. インターバル
             delay(400)
             isLocked = false
         }
     }
 
     private suspend fun getOrCreateHukuro(id: String): NotionPage {
-        return repository.findOrCreatePage(
-            databaseId = SecretConfig.DATABASE_ID_HUKURO,
-            pkColumnName = "袋ID",
-            uid = id,
-            defaultNameColumn = "商品名",
-            defaultNameValue = "新規登録パーツ"
-        )
+        return repository.findOrCreatePage(SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "商品名", "新規登録パーツ")
     }
 
     private suspend fun getOrCreateHako(id: String): NotionPage {
-        return repository.findOrCreatePage(
-            databaseId = SecretConfig.DATABASE_ID_HAKO,
-            pkColumnName = "箱ID",
-            uid = id,
-            defaultNameColumn = "箱名",
-            defaultNameValue = "新しい箱"
-        )
+        return repository.findOrCreatePage(SecretConfig.DATABASE_ID_HAKO, "箱ID", id, "箱名", "新しい箱")
     }
 
     private suspend fun processHukuro(id: String) {
@@ -207,6 +192,8 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             updateUI(page.properties["商品名"]?.rich_text?.firstOrNull()?.plain_text ?: id, "袋を開きました")
         } catch (e: Exception) {
             updateUI("エラー", e.localizedMessage ?: "不明なエラー")
+        } finally {
+            withContext(Dispatchers.Main) { isScanningActive = false } // 処理完了でスキャン停止
         }
     }
 
@@ -217,6 +204,8 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             updateUI(page.properties["箱名"]?.rich_text?.firstOrNull()?.plain_text ?: id, "箱を開きました")
         } catch (e: Exception) {
             updateUI("エラー", e.localizedMessage ?: "不明なエラー")
+        } finally {
+            withContext(Dispatchers.Main) { isScanningActive = false } // 処理完了でスキャン停止
         }
     }
 
@@ -231,6 +220,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             }
         } catch (e: Exception) {
             updateUI("エラー", e.localizedMessage ?: "不明なエラー")
+            withContext(Dispatchers.Main) { isScanningActive = false } // エラー時もスキャン停止
         }
     }
 
@@ -247,6 +237,8 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
             }
         } catch (e: Exception) {
             updateUI("エラー", e.localizedMessage ?: "不明なエラー")
+        } finally {
+             withContext(Dispatchers.Main) { isScanningActive = false } // 処理完了でスキャン停止
         }
     }
 
@@ -276,6 +268,7 @@ fun MainScreen(
     title: String,
     status: String,
     hasCameraPermission: Boolean,
+    isScanningActive: Boolean,
     isFlashing: Boolean,
     onIdDetected: (String) -> Unit,
     onModeChange: (ScanMode) -> Unit,
@@ -289,7 +282,6 @@ fun MainScreen(
         
         Spacer(modifier = Modifier.height(12.dp))
         
-        // --- モード切替ボタン ---
         Button(
             onClick = { onModeChange(ScanMode.SHIMAU_STEP1_HAKO) },
             modifier = Modifier.fillMaxWidth(),
@@ -305,13 +297,13 @@ fun MainScreen(
             Button(
                 onClick = { onModeChange(ScanMode.HUKURO_SCAN) },
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = if(mode == ScanMode.HUKURO_SCAN) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
+                colors = ButtonDefaults.buttonColors(containerColor = if(mode == ScanMode.HUKURO_SCAN && isScanningActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
             ) { Text("袋スキャン") }
             
             Button(
                 onClick = { onModeChange(ScanMode.HAKO_SCAN) },
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = if(mode == ScanMode.HAKO_SCAN) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
+                colors = ButtonDefaults.buttonColors(containerColor = if(mode == ScanMode.HAKO_SCAN && isScanningActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
             ) { Text("箱スキャン") }
         }
 
@@ -319,13 +311,18 @@ fun MainScreen(
 
         // --- スキャン結果表示 ---
         Card(
-            modifier = Modifier.fillMaxWidth(), 
+            modifier = Modifier.fillMaxWidth().height(120.dp), // 高さを固定
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                modifier = Modifier.padding(12.dp).fillMaxSize(), 
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceAround // 均等配置
+            ) {
+                // 【UI変更】ステータスメッセージを上に配置し、スタイルを変更
+                Text(status, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                // 【UI変更】ID表示は小さく
                 Text("ID: $id", style = MaterialTheme.typography.labelSmall)
-                Text(title.ifEmpty { "---" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(status, style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
         }
         
@@ -333,25 +330,14 @@ fun MainScreen(
 
         // --- 下半分: QRコードスキャンエリア ---
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .background(Color.Black),
+            modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            if (hasCameraPermission) {
-                QrScannerView(onQrCodeDetected = { qrValue ->
-                    onIdDetected(qrValue)
-                })
+            if (hasCameraPermission && isScanningActive) {
+                QrScannerView(onQrCodeDetected = { qrValue -> onIdDetected(qrValue) })
                 
-                // スキャンエリアのガイド枠
-                Box(
-                    modifier = Modifier
-                        .size(200.dp)
-                        .border(2.dp, Color.White.copy(alpha = 0.5f), shape = MaterialTheme.shapes.medium)
-                )
+                Box(modifier = Modifier.size(200.dp).border(2.dp, Color.White.copy(alpha = 0.5f), shape = MaterialTheme.shapes.medium))
 
-                // 【修正箇所】明示的にスコープを指定しないように修正
                 androidx.compose.animation.AnimatedVisibility(
                     visible = isFlashing,
                     enter = fadeIn(),
@@ -361,10 +347,10 @@ fun MainScreen(
                 }
 
             } else {
-                Text("カメラ権限が必要です", color = Color.White)
+                Text(if(hasCameraPermission) "スキャン待機中" else "カメラ権限が必要です", color = Color.White)
             }
         }
         
-        Text("背面NFCまたはカメラQRでスキャン", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 8.dp))
+        Text("ボタンを押してスキャン開始", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 8.dp))
     }
 }
