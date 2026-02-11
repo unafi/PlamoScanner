@@ -16,6 +16,13 @@
 # Secrets
 SecretConfig.kt
 **/SecretConfig.kt
+credentials.json
+**/credentials.json
+
+# Tokens
+token.json
+**/token.json
+
 
 # Keystore files
 *.jks
