@@ -38,5 +38,6 @@ NFC（背面タッチ）とQRコード（カメラ）の双方を同時に待ち
 - **箱名** (Rich Text): 収納場所の名称
 
 ## セットアップ
-1. `SecretConfig.kt` にNotionのAPIキーとデータベースIDを設定。
-2. Android実機でカメラ権限とNFCを有効にして実行。
+1. `SecretConfig.kt` にNotionのAPIキー(インテグレーションシークレット)とデータベースID(NotionデータベースのURLに含まれる32桁の英数字)を設定。
+2. Notionのインテグレーションに、対象のデータベースへのアクセス権を付与。
+3. Android実機でカメラ権限とNFCを有効にして実行。
