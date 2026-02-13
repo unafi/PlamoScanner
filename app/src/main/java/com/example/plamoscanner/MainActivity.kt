@@ -102,6 +102,8 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     // プレビュー用画像ステート
                     var capturedImage by remember { mutableStateOf<Bitmap?>(null) }
+                    // カメラコントローラー
+                    val scannerController = remember { ScannerController() }
 
                     MainScreen(
                         mode = currentMode,
@@ -112,6 +114,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                         isScanningActive = isScanningActive,
                         isFlashing = isFlashing,
                         capturedBitmap = capturedImage,
+                        scannerController = scannerController,
                         onIdDetected = { id -> onIdDetected(id) },
                         onModeChange = { 
                             currentMode = it
@@ -127,8 +130,11 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                             }
                         },
                         onCapture = {
-                            // Step 2で実装: 撮影処理
-                            Toast.makeText(context, "撮影ボタン (未実装)", Toast.LENGTH_SHORT).show()
+                            // 撮影処理
+                            scannerController.takePhoto(context) { bitmap ->
+                                capturedImage = bitmap
+                                Toast.makeText(context, "撮影完了", Toast.LENGTH_SHORT).show()
+                            }
                         },
                         onCancel = {
                             // 中止処理: スキャン停止 & リセット
@@ -289,6 +295,7 @@ fun MainScreen(
     isScanningActive: Boolean,
     isFlashing: Boolean,
     capturedBitmap: Bitmap?, // プレビュー用画像
+    scannerController: ScannerController,
     onIdDetected: (String) -> Unit,
     onModeChange: (ScanMode) -> Unit,
     onCapture: () -> Unit, // 撮影ボタン動作
@@ -355,7 +362,10 @@ fun MainScreen(
             if (hasCameraPermission) {
                 if (isScanningActive) {
                     // カメラプレビュー
-                    QrScannerView(onQrCodeDetected = { qrValue -> onIdDetected(qrValue) })
+                    QrScannerView(
+                        onQrCodeDetected = { qrValue -> onIdDetected(qrValue) },
+                        scannerController = scannerController
+                    )
                     
                     // QR読み取りガイド枠
                     Box(modifier = Modifier.size(200.dp).border(2.dp, Color.White.copy(alpha = 0.5f), shape = MaterialTheme.shapes.medium))
@@ -371,19 +381,23 @@ fun MainScreen(
 
                     // --- カメラコントロール UI (オーバーレイ) ---
                     Column(
-                        modifier = Modifier.fillMaxSize().padding(bottom = 16.dp),
-                        verticalArrangement = Arrangement.Bottom,
+                        modifier = Modifier.fillMaxSize().padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // プレビュー画像があれば表示
+                        // 【改善】プレビュー画像をさらに上へ（オフセット-90dp）
                         if (capturedBitmap != null) {
-                            Text("保存候補:", color = Color.White, fontSize = 14.sp)
                             Image(
                                 bitmap = capturedBitmap.asImageBitmap(),
                                 contentDescription = "Preview",
-                                modifier = Modifier.size(150.dp).padding(8.dp).border(2.dp, Color.White)
+                                modifier = Modifier
+                                    .size(180.dp) 
+                                    .offset(y = (-90).dp) // 半分のサイズ分、上に移動
+                                    .border(2.dp, Color.White, shape = MaterialTheme.shapes.medium)
                             )
                         }
+
+                        // スペーサーでボタンを下に押しやる
+                        Spacer(modifier = Modifier.weight(1f))
 
                         // ボタンエリア
                         Row(

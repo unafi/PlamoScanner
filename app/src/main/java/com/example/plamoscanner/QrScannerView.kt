@@ -1,5 +1,8 @@
 package com.example.plamoscanner
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.camera.core.*
@@ -20,13 +23,13 @@ import java.util.concurrent.Executors
 @Composable
 fun QrScannerView(
     onQrCodeDetected: (String) -> Unit,
+    scannerController: ScannerController? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     
-    // スキャン間隔を制限するためのフラグ
     var isProcessing by remember { mutableStateOf(false) }
 
     AndroidView(
@@ -62,7 +65,6 @@ fun QrScannerView(
                                             if (qrValue.isNotEmpty()) {
                                                 isProcessing = true
                                                 onQrCodeDetected(qrValue)
-                                                // 3秒間は再スキャンを防ぐ（連続検知防止）
                                                 previewView.postDelayed({ isProcessing = false }, 3000)
                                             }
                                         }
@@ -75,13 +77,20 @@ fun QrScannerView(
                         }
                     }
 
+                val imageCapture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .build()
+                
+                scannerController?.bind(imageCapture)
+
                 try {
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(
                         lifecycleOwner,
                         CameraSelector.DEFAULT_BACK_CAMERA,
                         preview,
-                        imageAnalysis
+                        imageAnalysis,
+                        imageCapture
                     )
                 } catch (e: Exception) {
                     Log.e("QrScanner", "Binding failed", e)
@@ -89,4 +98,56 @@ fun QrScannerView(
             }, ContextCompat.getMainExecutor(context))
         }
     )
+}
+
+class ScannerController {
+    private var imageCapture: ImageCapture? = null
+
+    fun bind(capture: ImageCapture) {
+        this.imageCapture = capture
+    }
+
+    fun takePhoto(context: Context, onCaptured: (Bitmap) -> Unit) {
+        val imageCapture = this.imageCapture ?: return
+
+        imageCapture.takePicture(
+            ContextCompat.getMainExecutor(context),
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    try {
+                        // 1. プレーンなBitmapを取得 (この時点では回転が適用されていない)
+                        val originalBitmap = image.toBitmap()
+                        
+                        // 2. 回転情報を取得して補正用のMatrixを作成
+                        val rotationDegrees = image.imageInfo.rotationDegrees
+                        val matrix = Matrix().apply {
+                            postRotate(rotationDegrees.toFloat())
+                        }
+                        
+                        // 3. 回転済みのBitmapを作成
+                        val rotatedBitmap = Bitmap.createBitmap(
+                            originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true
+                        )
+                        
+                        // 4. 回転後の画像から正方形にクロップ
+                        val size = Math.min(rotatedBitmap.width, rotatedBitmap.height)
+                        val x = (rotatedBitmap.width - size) / 2
+                        val y = (rotatedBitmap.height - size) / 2
+                        
+                        val squareBitmap = Bitmap.createBitmap(rotatedBitmap, x, y, size, size)
+                        
+                        onCaptured(squareBitmap)
+                    } catch (e: Exception) {
+                        Log.e("ScannerController", "Image processing failed", e)
+                    } finally {
+                        image.close()
+                    }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    Log.e("ScannerController", "Photo capture failed: ${exception.message}", exception)
+                }
+            }
+        )
+    }
 }
