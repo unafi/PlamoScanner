@@ -12,6 +12,7 @@
 /captures
 .externalNativeBuild
 .cxx
+/QRPrint/temp_qrs
 
 # Secrets
 SecretConfig.kt
