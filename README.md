@@ -2,7 +2,8 @@
 
 NFCタグ（RFID）とQRコードの両方を活用して、プラモデルの余剰パーツと収納箱を紐付けて管理するAndroidアプリです。
 
-<img src="画面イメージ.png" width="300" alt="画面イメージ">
+<img src="画面イメージ.png" width="300" alt="画面イメージ">  <img src="Notion画面.png" width="300" alt="Notion画面">
+
 
 ## 主な機能
 
