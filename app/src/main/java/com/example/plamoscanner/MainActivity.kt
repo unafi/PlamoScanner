@@ -3,6 +3,7 @@ package com.example.plamoscanner
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.media.MediaActionSound
 import android.net.Uri
 import android.nfc.NfcAdapter
@@ -17,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -25,6 +27,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -97,6 +100,9 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                 }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                    // プレビュー用画像ステート
+                    var capturedImage by remember { mutableStateOf<Bitmap?>(null) }
+
                     MainScreen(
                         mode = currentMode,
                         id = scannedId,
@@ -105,18 +111,30 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                         hasCameraPermission = hasCameraPermission,
                         isScanningActive = isScanningActive,
                         isFlashing = isFlashing,
+                        capturedBitmap = capturedImage,
                         onIdDetected = { id -> onIdDetected(id) },
                         onModeChange = { 
                             currentMode = it
                             scannedId = "-"
                             resultTitle = ""
                             isScanningActive = true // ボタン押下でスキャン開始
+                            capturedImage = null    // 画像クリア
                             statusMessage = when(it) {
                                 ScanMode.HUKURO_SCAN -> "袋をスキャンしてください"
                                 ScanMode.HAKO_SCAN -> "箱をスキャンしてください"
                                 ScanMode.SHIMAU_STEP1_HAKO -> "【1/2】箱をスキャンしてください"
                                 ScanMode.SHIMAU_STEP2_HUKURO -> "【2/2】袋をスキャンしてください"
                             }
+                        },
+                        onCapture = {
+                            // Step 2で実装: 撮影処理
+                            Toast.makeText(context, "撮影ボタン (未実装)", Toast.LENGTH_SHORT).show()
+                        },
+                        onCancel = {
+                            // 中止処理: スキャン停止 & リセット
+                            isScanningActive = false
+                            capturedImage = null
+                            statusMessage = "ボタンを押してスキャン開始"
                         },
                         modifier = Modifier.padding(innerPadding)
                     )
@@ -270,8 +288,11 @@ fun MainScreen(
     hasCameraPermission: Boolean,
     isScanningActive: Boolean,
     isFlashing: Boolean,
+    capturedBitmap: Bitmap?, // プレビュー用画像
     onIdDetected: (String) -> Unit,
     onModeChange: (ScanMode) -> Unit,
+    onCapture: () -> Unit, // 撮影ボタン動作
+    onCancel: () -> Unit,  // 中止ボタン動作
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -319,38 +340,79 @@ fun MainScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceAround // 均等配置
             ) {
-                // 【UI変更】ステータスメッセージを上に配置し、スタイルを変更
                 Text(status, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-                // 【UI変更】ID表示は小さく
                 Text("ID: $id", style = MaterialTheme.typography.labelSmall)
             }
         }
         
         Spacer(modifier = Modifier.height(16.dp))
 
-        // --- 下半分: QRコードスキャンエリア ---
+        // --- 下半分: QRコードスキャンエリア & カメラコントロール ---
         Box(
             modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            if (hasCameraPermission && isScanningActive) {
-                QrScannerView(onQrCodeDetected = { qrValue -> onIdDetected(qrValue) })
-                
-                Box(modifier = Modifier.size(200.dp).border(2.dp, Color.White.copy(alpha = 0.5f), shape = MaterialTheme.shapes.medium))
+            if (hasCameraPermission) {
+                if (isScanningActive) {
+                    // カメラプレビュー
+                    QrScannerView(onQrCodeDetected = { qrValue -> onIdDetected(qrValue) })
+                    
+                    // QR読み取りガイド枠
+                    Box(modifier = Modifier.size(200.dp).border(2.dp, Color.White.copy(alpha = 0.5f), shape = MaterialTheme.shapes.medium))
 
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = isFlashing,
-                    enter = fadeIn(),
-                    exit = fadeOut()
-                ) {
-                    Box(modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.6f)))
+                    // フラッシュエフェクト
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isFlashing,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.6f)))
+                    }
+
+                    // --- カメラコントロール UI (オーバーレイ) ---
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(bottom = 16.dp),
+                        verticalArrangement = Arrangement.Bottom,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // プレビュー画像があれば表示
+                        if (capturedBitmap != null) {
+                            Text("保存候補:", color = Color.White, fontSize = 14.sp)
+                            Image(
+                                bitmap = capturedBitmap.asImageBitmap(),
+                                contentDescription = "Preview",
+                                modifier = Modifier.size(150.dp).padding(8.dp).border(2.dp, Color.White)
+                            )
+                        }
+
+                        // ボタンエリア
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 撮影ボタン
+                            Button(
+                                onClick = onCapture,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)
+                            ) {
+                                Text("📷 撮影", color = Color.Black)
+                            }
+                            // 中止ボタン
+                            Button(
+                                onClick = onCancel,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)
+                            ) {
+                                Text("中止", color = Color.Black)
+                            }
+                        }
+                    }
+
+                } else {
+                    Text("ボタンを押してスキャン開始", color = Color.White)
                 }
-
             } else {
-                Text(if(hasCameraPermission) "スキャン待機中" else "カメラ権限が必要です", color = Color.White)
+                Text("カメラ権限が必要です", color = Color.White)
             }
         }
-        
-        Text("ボタンを押してスキャン開始", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 8.dp))
     }
 }
