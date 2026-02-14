@@ -9,6 +9,7 @@ import android.net.Uri
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -42,10 +43,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class ScanMode {
-    HUKURO_SCAN, // 袋スキャン・登録
-    HAKO_SCAN,   // 箱スキャン・登録
-    SHIMAU_STEP1_HAKO, // 箱にしまう（ステップ1：箱スキャン）
-    SHIMAU_STEP2_HUKURO // 箱にしまう（ステップ2：袋スキャン）
+    HUKURO_SCAN,
+    HAKO_SCAN,
+    SHIMAU_STEP1_HAKO,
+    SHIMAU_STEP2_HUKURO
 }
 
 class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
@@ -53,6 +54,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     private var nfcAdapter: NfcAdapter? = null
     private val repository = NotionRepository()
     private val shutterSound = MediaActionSound()
+    private val TAG = "PlamoScanner"
 
     // UI表示用ステート
     private var currentMode by mutableStateOf(ScanMode.HUKURO_SCAN)
@@ -64,6 +66,9 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     private var isScanningActive by mutableStateOf(false)
     private var isFlashing by mutableStateOf(false)
     private var isLocked by mutableStateOf(false)
+
+    // アップロード用の画像保持
+    private var capturedImageForUpload: Bitmap? = null
 
     // 「箱にしまう」の一時保持用
     private var selectedHakoPageId: String? = null
@@ -100,9 +105,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                 }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    // プレビュー用画像ステート
-                    var capturedImage by remember { mutableStateOf<Bitmap?>(null) }
-                    // カメラコントローラー
+                    var uiCapturedImage by remember { mutableStateOf<Bitmap?>(null) }
                     val scannerController = remember { ScannerController() }
 
                     MainScreen(
@@ -113,15 +116,16 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                         hasCameraPermission = hasCameraPermission,
                         isScanningActive = isScanningActive,
                         isFlashing = isFlashing,
-                        capturedBitmap = capturedImage,
+                        capturedBitmap = uiCapturedImage,
                         scannerController = scannerController,
                         onIdDetected = { id -> onIdDetected(id) },
                         onModeChange = { 
                             currentMode = it
                             scannedId = "-"
                             resultTitle = ""
-                            isScanningActive = true // ボタン押下でスキャン開始
-                            capturedImage = null    // 画像クリア
+                            isScanningActive = true
+                            uiCapturedImage = null
+                            capturedImageForUpload = null // 初期化
                             statusMessage = when(it) {
                                 ScanMode.HUKURO_SCAN -> "袋をスキャンしてください"
                                 ScanMode.HAKO_SCAN -> "箱をスキャンしてください"
@@ -130,16 +134,17 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                             }
                         },
                         onCapture = {
-                            // 撮影処理
                             scannerController.takePhoto(context) { bitmap ->
-                                capturedImage = bitmap
+                                uiCapturedImage = bitmap
+                                capturedImageForUpload = bitmap // アップロード用にセット
+                                Log.d(TAG, "Photo captured and set for upload.")
                                 Toast.makeText(context, "撮影完了", Toast.LENGTH_SHORT).show()
                             }
                         },
                         onCancel = {
-                            // 中止処理: スキャン停止 & リセット
                             isScanningActive = false
-                            capturedImage = null
+                            uiCapturedImage = null
+                            capturedImageForUpload = null
                             statusMessage = "ボタンを押してスキャン開始"
                         },
                         modifier = Modifier.padding(innerPadding)
@@ -174,7 +179,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     }
 
     private fun onIdDetected(id: String) {
-        if (!isScanningActive || isLocked) return // 非アクティブ時、ロック中は無視
+        if (!isScanningActive || isLocked) return
 
         lifecycleScope.launch(Dispatchers.Main) {
             isLocked = true
@@ -201,41 +206,38 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         }
     }
 
-    private suspend fun getOrCreateHukuro(id: String): NotionPage {
-        return repository.findOrCreatePage(SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "商品名", "新規登録パーツ")
-    }
-
-    private suspend fun getOrCreateHako(id: String): NotionPage {
-        return repository.findOrCreatePage(SecretConfig.DATABASE_ID_HAKO, "箱ID", id, "箱名", "新しい箱")
-    }
-
     private suspend fun processHukuro(id: String) {
         try {
-            val page = getOrCreateHukuro(id)
+            val page = repository.findOrCreatePage(SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "商品名", "新規登録パーツ")
+            handleImageUpload(page.id)
             openNotionPage(page.url)
             updateUI(page.properties["商品名"]?.rich_text?.firstOrNull()?.plain_text ?: id, "袋を開きました")
         } catch (e: Exception) {
+            Log.e(TAG, "Error in processHukuro: ${e.message}")
             updateUI("エラー", e.localizedMessage ?: "不明なエラー")
         } finally {
-            withContext(Dispatchers.Main) { isScanningActive = false } // 処理完了でスキャン停止
+            withContext(Dispatchers.Main) { isScanningActive = false }
         }
     }
 
     private suspend fun processHako(id: String) {
         try {
-            val page = getOrCreateHako(id)
+            val page = repository.findOrCreatePage(SecretConfig.DATABASE_ID_HAKO, "箱ID", id, "箱名", "新しい箱")
+            handleImageUpload(page.id)
             openNotionPage(page.url)
             updateUI(page.properties["箱名"]?.rich_text?.firstOrNull()?.plain_text ?: id, "箱を開きました")
         } catch (e: Exception) {
+            Log.e(TAG, "Error in processHako: ${e.message}")
             updateUI("エラー", e.localizedMessage ?: "不明なエラー")
         } finally {
-            withContext(Dispatchers.Main) { isScanningActive = false } // 処理完了でスキャン停止
+            withContext(Dispatchers.Main) { isScanningActive = false }
         }
     }
 
     private suspend fun processShimauStep1(id: String) {
         try {
-            val hakoPage = getOrCreateHako(id)
+            val hakoPage = repository.findOrCreatePage(SecretConfig.DATABASE_ID_HAKO, "箱ID", id, "箱名", "新しい箱")
+            handleImageUpload(hakoPage.id)
             selectedHakoPageId = hakoPage.id
             selectedHakoUid = id
             withContext(Dispatchers.Main) {
@@ -243,15 +245,17 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                 statusMessage = "箱「${hakoPage.properties["箱名"]?.rich_text?.firstOrNull()?.plain_text ?: id}」を選択中。\n次に袋をスキャンしてください。"
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Error in processShimauStep1: ${e.message}")
             updateUI("エラー", e.localizedMessage ?: "不明なエラー")
-            withContext(Dispatchers.Main) { isScanningActive = false } // エラー時もスキャン停止
+            withContext(Dispatchers.Main) { isScanningActive = false }
         }
     }
 
     private suspend fun processShimauStep2(id: String) {
         val hakoId = selectedHakoPageId ?: return
         try {
-            val hukuroPage = getOrCreateHukuro(id)
+            val hukuroPage = repository.findOrCreatePage(SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "商品名", "新規登録パーツ")
+            handleImageUpload(hukuroPage.id)
             repository.updateHukuroLocation(hukuroPage.id, hakoId)
             updateUI("完了", "袋を箱に紐付けました！")
             val finalHakoPage = repository.getPage(SecretConfig.DATABASE_ID_HAKO, "箱ID", selectedHakoUid!!)
@@ -260,9 +264,27 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                 currentMode = ScanMode.HUKURO_SCAN
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Error in processShimauStep2: ${e.message}")
             updateUI("エラー", e.localizedMessage ?: "不明なエラー")
         } finally {
-             withContext(Dispatchers.Main) { isScanningActive = false } // 処理完了でスキャン停止
+             withContext(Dispatchers.Main) { isScanningActive = false }
+        }
+    }
+
+    private suspend fun handleImageUpload(pageId: String) {
+        val img = capturedImageForUpload
+        if (img == null) {
+            Log.d(TAG, "handleImageUpload: No image to upload.")
+            return
+        }
+        
+        Log.d(TAG, "handleImageUpload: Starting upload for page $pageId...")
+        val fileId = repository.uploadImage(img)
+        if (fileId != null) {
+            Log.d(TAG, "handleImageUpload: Upload success. Linking FileID $fileId to Page $pageId...")
+            repository.updatePageImage(pageId, fileId)
+        } else {
+            Log.e(TAG, "handleImageUpload: Upload failed (fileId is null).")
         }
     }
 
@@ -294,12 +316,12 @@ fun MainScreen(
     hasCameraPermission: Boolean,
     isScanningActive: Boolean,
     isFlashing: Boolean,
-    capturedBitmap: Bitmap?, // プレビュー用画像
+    capturedBitmap: Bitmap?,
     scannerController: ScannerController,
     onIdDetected: (String) -> Unit,
     onModeChange: (ScanMode) -> Unit,
-    onCapture: () -> Unit, // 撮影ボタン動作
-    onCancel: () -> Unit,  // 中止ボタン動作
+    onCapture: () -> Unit,
+    onCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -337,15 +359,14 @@ fun MainScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // --- スキャン結果表示 ---
         Card(
-            modifier = Modifier.fillMaxWidth().height(120.dp), // 高さを固定
+            modifier = Modifier.fillMaxWidth().height(120.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(
                 modifier = Modifier.padding(12.dp).fillMaxSize(), 
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceAround // 均等配置
+                verticalArrangement = Arrangement.SpaceAround
             ) {
                 Text(status, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                 Text("ID: $id", style = MaterialTheme.typography.labelSmall)
@@ -354,23 +375,19 @@ fun MainScreen(
         
         Spacer(modifier = Modifier.height(16.dp))
 
-        // --- 下半分: QRコードスキャンエリア & カメラコントロール ---
         Box(
             modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
             if (hasCameraPermission) {
                 if (isScanningActive) {
-                    // カメラプレビュー
                     QrScannerView(
                         onQrCodeDetected = { qrValue -> onIdDetected(qrValue) },
                         scannerController = scannerController
                     )
                     
-                    // QR読み取りガイド枠
                     Box(modifier = Modifier.size(200.dp).border(2.dp, Color.White.copy(alpha = 0.5f), shape = MaterialTheme.shapes.medium))
 
-                    // フラッシュエフェクト
                     androidx.compose.animation.AnimatedVisibility(
                         visible = isFlashing,
                         enter = fadeIn(),
@@ -379,39 +396,33 @@ fun MainScreen(
                         Box(modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.6f)))
                     }
 
-                    // --- カメラコントロール UI (オーバーレイ) ---
                     Column(
                         modifier = Modifier.fillMaxSize().padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // 【改善】プレビュー画像をさらに上へ（オフセット-90dp）
                         if (capturedBitmap != null) {
                             Image(
                                 bitmap = capturedBitmap.asImageBitmap(),
                                 contentDescription = "Preview",
                                 modifier = Modifier
                                     .size(180.dp) 
-                                    .offset(y = (-90).dp) // 半分のサイズ分、上に移動
+                                    .offset(y = (-90).dp)
                                     .border(2.dp, Color.White, shape = MaterialTheme.shapes.medium)
                             )
                         }
 
-                        // スペーサーでボタンを下に押しやる
                         Spacer(modifier = Modifier.weight(1f))
 
-                        // ボタンエリア
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 撮影ボタン
                             Button(
                                 onClick = onCapture,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)
                             ) {
                                 Text("📷 撮影", color = Color.Black)
                             }
-                            // 中止ボタン
                             Button(
                                 onClick = onCancel,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)

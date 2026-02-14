@@ -1,6 +1,9 @@
 package com.example.plamoscanner
 
+import com.google.gson.annotations.SerializedName
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -18,11 +21,10 @@ data class TextFilter(val equals: String)
 
 data class NotionResponse(val results: List<NotionPage>)
 
-// Notionのページ情報（URLを含む）
 data class NotionPage(
     val id: String, 
     val properties: Map<String, NotionProperty>,
-    val url: String // Notionアプリで開くために必要
+    val url: String
 )
 
 data class NotionProperty(
@@ -34,12 +36,26 @@ data class NotionProperty(
 )
 
 data class NotionText(val plain_text: String)
-data class NotionRelation(val id: String) // リレーション先のPageID
+data class NotionRelation(val id: String)
 
-// 作成・更新用
 data class NotionCreateRequest(val parent: Parent, val properties: Map<String, Any>)
 data class NotionUpdateRequest(val properties: Map<String, Any>)
 data class Parent(val database_id: String)
+
+// --- ファイルアップロード用 ---
+data class NotionUploadInitRequest(
+    val file: NotionUploadFileDetails
+)
+data class NotionUploadFileDetails(
+    val name: String,
+    val type: String
+)
+
+data class NotionUploadInitResponse(
+    @SerializedName("upload_url") val url: String,
+    @SerializedName("id") val file_id: String,
+    val signed_get_url: String? = null
+)
 
 // --- API定義 ---
 interface NotionService {
@@ -58,7 +74,6 @@ interface NotionService {
         @Body request: NotionCreateRequest
     ): NotionPage
 
-    // ページ更新用（リレーションの設定などに使用）
     @PATCH("v1/pages/{page_id}")
     suspend fun updatePage(
         @Path("page_id") pageId: String,
@@ -66,6 +81,23 @@ interface NotionService {
         @Header("Notion-Version") version: String = "2022-06-28",
         @Body request: NotionUpdateRequest
     ): NotionPage
+
+    @POST("v1/file_uploads")
+    suspend fun initializeUpload(
+        @Header("Authorization") auth: String,
+        @Header("Notion-Version") version: String = "2022-06-28",
+        @Body request: NotionUploadInitRequest
+    ): NotionUploadInitResponse
+
+    // GAS版 (Code.gs) に合わせ、POST の Multipart 形式に変更
+    @Multipart
+    @POST
+    suspend fun uploadFile(
+        @Url url: String,
+        @Header("Authorization") auth: String,
+        @Header("Notion-Version") version: String = "2022-06-28",
+        @Part file: MultipartBody.Part
+    )
 }
 
 object NotionClient {
