@@ -1,4 +1,4 @@
-package com.example.plamoscanner
+package dev.unafi.plamoscanner
 
 import android.content.Context
 import android.graphics.Bitmap

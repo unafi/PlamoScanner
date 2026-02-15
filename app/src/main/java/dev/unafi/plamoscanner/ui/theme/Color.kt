@@ -1,4 +1,4 @@
-package com.example.plamoscanner.ui.theme
+package dev.unafi.plamoscanner.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

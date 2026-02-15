@@ -4,11 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.example.plamoscanner"
+    // パッケージ名を dev.unafi に統一
+    namespace = "dev.unafi.plamoscanner"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.plamoscanner"
+        applicationId = "dev.unafi.plamoscanner"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -55,7 +56,7 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
-    implementation(libs.play.services.barcode.scanning) // 修正点: ハイフンをドットに変更
+    implementation(libs.play.services.barcode.scanning)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
